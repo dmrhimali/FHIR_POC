@@ -1,0 +1,70 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: debezium/example-postgres
+    container_name: postgres
+    ports:
+      - '25432:5432'
+    expose:
+      - '25432'
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+      - ./sql/create_tables.sql:/docker-entrypoint-initdb.d/create_tables.sql
+      - ./sql/fill_tables.sql:/docker-entrypoint-initdb.d/fill_tables.sql
+#  zookeeper:
+#    image: debezium/zookeeper
+#    container_name: zookeeper
+#    ports:
+#      - "2181:2181"
+#      - "2888:2888"
+#      - "3888:3888"
+#    expose:
+#      - '2181'
+#  kafka:
+#    image: debezium/kafka
+#    container_name: kafka
+#    ports:
+#      - "9092:9092"
+#      - "29092:29092"
+#    expose:
+#      - '29092'
+#    depends_on:
+#      - zookeeper
+#    environment:
+#      KAFKA_BROKER_ID: 1
+#      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+#      KAFKA_LISTENERS: PLAINTEXT://:9092,FROM_HOST://:29092
+#      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,FROM_HOST://localhost:29092
+#      KAFKA_ALLOW_PLAINTEXT_LISTENER: "yes"
+#      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,FROM_HOST:PLAINTEXT
+#      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+#      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+#
+#  connect:
+#    image: debezium/connect
+#    container_name: connect
+#    ports:
+#      - "8083:8083"
+#    expose:
+#      - '8083'
+#    environment:
+#      - BOOTSTRAP_SERVERS=kafka:9092
+#      - GROUP_ID=1
+#      - CONFIG_STORAGE_TOPIC=my_connect_configs
+#      - OFFSET_STORAGE_TOPIC=my_connect_offsets
+#      - STATUS_STORAGE_TOPIC=my_connect_statuses
+#      - CLASSPATH=/usr/local/Cellar/kafka/3.0.0/libexec/libs/debezium_plugins/debezium-connector-postgres/postgresql-42.2.9.jar
+#    depends_on:
+#      - zookeeper
+#      - kafka
+#      - postgres
+#    volumes:
+#      - /var/yp/sink/lib:/usr/local/Cellar/kafka/3.0.0/libexec/libs/debezium_plugins/debezium-connector-postgres/
+networks:
+  default:
+
+
