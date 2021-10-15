@@ -264,7 +264,8 @@ hapi:
 #  username: SomeUsername
 ```
 
-### run postgres docker
+**run postgres docker**
+
 check postgresdocker image
 
 'docker-compose up hapi-fhir-postgresdb'
@@ -300,6 +301,7 @@ db=fhir
 tables= hfj_resource, hfj_re_ver etc.
 
 ### do some api calls
+
 **get metadata**
 GET http://localhost:8080/fhir/metadata
 
