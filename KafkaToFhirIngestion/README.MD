@@ -1,21 +1,345 @@
+# KafkaToFhir
 
+Ingestion framework
 
-
+Need fhirserver(pain or jpa-server) running for this to work
 
 ## LOCAL KAFKA DEBEZIUM SETUP  (Recommended)
 
-We will locally install kafka and use debezium to bring
+Here we will locally install kafka and use debezium to bring docker postgres table: public.member to kafka topic: dbserver1.public.member
+
+### step1: run postgres docker container with member table:
+
+```sh
+docker-compose up -d postgres
+```
+
+connect to your db using datagrip (host: localhost, usr=postgres, pass=postgres, db=postgres) and you should see populated member table:
+```sh
+| id | status | first\_name | last\_name | date\_of\_birth | gender | address\_line\_1 | address\_line\_2 | address\_line\_3 | city | state | zipcode | country | sponsor\_id |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 1 | active | Greg | Jones | 1999-01-25 | male | 1 maple st | unit 1 | NULL | Decatur | Georgia | 10001 | Spain | 1 |
+| 2 | active | Toby | Brown | 2011-01-09 | male | 2 wildflower st | suite 1 | NULL | Decatur | Georgia | 92067 | Spain | 2 |
+| 3 | canceled | Jack | Brown | 1994-07-08 | female | 1 maple st | suite 1 | NULL | Plymouth | Minnesota | 92067 | India | 3 |
+| 4 | canceled | Jill | Johnson | 2010-01-17 | male | 3 hunter ln | suite 1 | NULL | Atlanta | Georgia | 10001 | Spain | 3 |
+| 5 | active | Tom | Johnson | 2008-01-29 | male | 3 hunter ln | suite 1 | NULL | Decatur | New  York | 92067 | Spain | 3 |
+| 6 | active | Tim | Zack | 2008-01-29 | male | 3 hunter ln | suite 1 | NULL | Decatur | New  York | 92067 | Spain | 3 |
+
+```
+
+### step2: install kafka on local mac
+
+prerequisite: need java installed
+
+```sh
+$ brew install kafka
+```
+
+This will install kafka on : `/usr/local/Cellar/kafka/`
+
+The poroperies files are located at` /usr/local/Cellar/kafka/2.4.1/libexec/config`
+
+### step3: run zookeeper
+zookeeper will be installed with kafka. start it:
+
+```sh
+$ zookeeper-server-start /usr/local/etc/kafka/zookeeper.properties
+```
+
+### step4: run kafka
+Start Kafka server:
+
+```sh
+$ kafka-server-start /usr/local/etc/kafka/server.properties
+```
+
+list kafka topics:
+```sh
+$ kafka-topics --list --bootstrap-server localhost:9092
+```
+
+### step5: add debezium postgres kafka jars
 
 
+Download  plugins archive:
 
-## DOCKER KAFKA DEBEZIUM CDC SETUP
+```sh
+$ wget https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/1.0.0.Final/debezium-connector-postgres-1.0.0.Final-plugin.tar.gz
+
+# also avaiable for manual download here: https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/1.7.0.Final/debezium-connector-postgres-1.7.0.Final-plugin.tar.gz
+```
+
+Unzip:
+
+```sh
+$ tar -xzf debezium-connector-postgres-1.7.0.Final-plugin.tar.gz
+```
+
+You will have following files :
+
+```sh
+debezium-connector-postgres-1.7.0.Final.jar
+protobuf-java-3.8.0.jar
+checker-qual-3.5.0.jar
+postgresql-42.2.22.jar
+failureaccess-1.0.1.jar
+guava-30.0-jre.jar
+debezium-api-1.7.0.Final.jar
+debezium-core-1.7.0.Final.jar
+```
+Move them to /`usr/local/Cellar/kafka/3.0.0/libexec/libs`
+
+stop and start kafka:
+
+```sh
+$ kafka-server-start /usr/local/etc/kafka/server.properties
+```
+
+### step6: run kafka connector for debezium
+
+Create our own connector file `debezium_postgres_connect.properties` under `/usr/local/Cellar/kafka/3.0.0/libexec/config/`:
+
+**debezium_postgres_connect.properties:**
+```sh
+name=genesis-connector
+connector.class=io.debezium.connector.postgresql.PostgresConnector
+tasks.max=1
+database.hostname=localhost
+database.port=25432
+database.user=postgres
+database.password=postgres
+database.dbname=postgres
+database.server.name=dbserver1
+database.history.kafka.bootstrap.servers=kafka:9092
+database.history.kafka.topic=schema-changes.genesis
+table.whitelist=public.member
+errors.log.enable=true
+```
+
+### step7: Run kafka connect with our custom debezium config:
+
+You may need to restart kafka/zookeeper:
+
+```sh
+# stop kafka, zookeeper (CTRL+C)
+
+$ rm -rf /usr/local/var/lib/zookeeper/*
+
+$ rm -rf /usr/local/var/lib/kafka-logs/*
+
+$ zookeeper-server-start /usr/local/etc/kafka/zookeeper.properties
+
+$ kafka-server-start /usr/local/etc/kafka/server.properties
+```
+
+Run connector. This is what brings in cdc data from member table to kafka topic dbserver1.public.member
+
+```sh
+$ cd /usr/local/Cellar/kafka/3.0.0/libexec/config
+
+$ connect-standalone connect-standalone.properties debezium_postgres_connect.properties
+```
+
+
+### step8: verify data sent:
+
+run topic console consumer:
+```sh
+$ kafka-console-consumer --bootstrap-server localhost:9092 --topic dbserver1.public.member --from-beginning
+```
+
+make some changes to table record, and it should show in console.
+
+output:
+```sh
+```sh
+{"schema":{"type":"struct","fields":[{"type":"struct","fields":[{"type":"int32","optional":false,"field":"id"},{"type":"string","optional":true,"field":"status"},{"type":"string","optional":true,"field":"first_name"},{"type":"string","optional":true,"field":"last_name"},{"type":"int32","optional":true,"name":"io.debezium.time.Date","version":1,"field":"date_of_birth"},{"type":"string","optional":true,"field":"gender"},{"type":"string","optional":true,"field":"address_line_1"},{"type":"string","optional":true,"field":"address_line_2"},{"type":"string","optional":true,"field":"address_line_3"},{"type":"string","optional":true,"field":"city"},{"type":"string","optional":true,"field":"state"},{"type":"string","optional":true,"field":"zipcode"},{"type":"string","optional":true,"field":"country"},{"type":"int64","optional":true,"field":"sponsor_id"}],"optional":true,"name":"dbserver1.public.member.Value","field":"before"},{"type":"struct","fields":[{"type":"int32","optional":false,"field":"id"},{"type":"string","optional":true,"field":"status"},{"type":"string","optional":true,"field":"first_name"},{"type":"string","optional":true,"field":"last_name"},{"type":"int32","optional":true,"name":"io.debezium.time.Date","version":1,"field":"date_of_birth"},{"type":"string","optional":true,"field":"gender"},{"type":"string","optional":true,"field":"address_line_1"},{"type":"string","optional":true,"field":"address_line_2"},{"type":"string","optional":true,"field":"address_line_3"},{"type":"string","optional":true,"field":"city"},{"type":"string","optional":true,"field":"state"},{"type":"string","optional":true,"field":"zipcode"},{"type":"string","optional":true,"field":"country"},{"type":"int64","optional":true,"field":"sponsor_id"}],"optional":true,"name":"dbserver1.public.member.Value","field":"after"},{"type":"struct","fields":[{"type":"string","optional":false,"field":"version"},{"type":"string","optional":false,"field":"connector"},{"type":"string","optional":false,"field":"name"},{"type":"int64","optional":false,"field":"ts_ms"},{"type":"string","optional":true,"name":"io.debezium.data.Enum","version":1,"parameters":{"allowed":"true,last,false"},"default":"false","field":"snapshot"},{"type":"string","optional":false,"field":"db"},{"type":"string","optional":true,"field":"sequence"},{"type":"string","optional":false,"field":"schema"},{"type":"string","optional":false,"field":"table"},{"type":"int64","optional":true,"field":"txId"},{"type":"int64","optional":true,"field":"lsn"},{"type":"int64","optional":true,"field":"xmin"}],"optional":false,"name":"io.debezium.connector.postgresql.Source","field":"source"},{"type":"string","optional":false,"field":"op"},{"type":"int64","optional":true,"field":"ts_ms"},{"type":"struct","fields":[{"type":"string","optional":false,"field":"id"},{"type":"int64","optional":false,"field":"total_order"},{"type":"int64","optional":false,"field":"data_collection_order"}],"optional":true,"field":"transaction"}],"optional":false,"name":"dbserver1.public.member.Envelope"},"payload":{"before":null,"after":{"id":935,"status":"active","first_name":"Tom","last_name":"Smith","date_of_birth":16910,"gender":"f","address_line_1":"2 wildflower st","address_line_2":"suite 1","address_line_3":null,"city":"Decatur","state":"Minnesota","zipcode":"92067","country":"United States","sponsor_id":3},"source":{"version":"1.7.0.Final","connector":"postgresql","name":"dbserver1","ts_ms":1634309812863,"snapshot":"true","db":"postgres","sequence":"[null,\"34442832\"]","schema":"public","table":"member","txId":615,"lsn":34442832,"xmin":null},"op":"r","ts_ms":1634309812863,"transaction":null}}
+{"schema":{"type":"struct","fields":[{"type":"struct","fields":[{"type":"int32","optional":false,"field":"id"},{"type":"string","optional":true,"field":"status"},{"type":"string","optional":true,"field":"first_name"},{"type":"string","optional":true,"field":"last_name"},{"type":"int32","optional":true,"name":"io.debezium.time.Date","version":1,"field":"date_of_birth"},{"type":"string","optional":true,"field":"gender"},{"type":"string","optional":true,"field":"address_line_1"},{"type":"string","optional":true,"field":"address_line_2"},{"type":"string","optional":true,"field":"address_line_3"},{"type":"string","optional":true,"field":"city"},{"type":"string","optional":true,"field":"state"},{"type":"string","optional":true,"field":"zipcode"},{"type":"string","optional":true,"field":"country"},{"type":"int64","optional":true,"field":"sponsor_id"}],"optional":true,"name":"dbserver1.public.member.Value","field":"before"},{"type":"struct","fields":[{"type":"int32","optional":false,"field":"id"},{"type":"string","optional":true,"field":"status"},{"type":"string","optional":true,"field":"first_name"},{"type":"string","optional":true,"field":"last_name"},{"type":"int32","optional":true,"name":"io.debezium.time.Date","version":1,"field":"date_of_birth"},{"type":"string","optional":true,"field":"gender"},{"type":"string","optional":true,"field":"address_line_1"},{"type":"string","optional":true,"field":"address_line_2"},{"type":"string","optional":true,"field":"address_line_3"},{"type":"string","optional":true,"field":"city"},{"type":"string","optional":true,"field":"state"},{"type":"string","optional":true,"field":"zipcode"},{"type":"string","optional":true,"field":"country"},{"type":"int64","optional":true,"field":"sponsor_id"}],"optional":true,"name":"dbserver1.public.member.Value","field":"after"},{"type":"struct","fields":[{"type":"string","optional":false,"field":"version"},{"type":"string","optional":false,"field":"connector"},{"type":"string","optional":false,"field":"name"},{"type":"int64","optional":false,"field":"ts_ms"},{"type":"string","optional":true,"name":"io.debezium.data.Enum","version":1,"parameters":{"allowed":"true,last,false"},"default":"false","field":"snapshot"},{"type":"string","optional":false,"field":"db"},{"type":"string","optional":true,"field":"sequence"},{"type":"string","optional":false,"field":"schema"},{"type":"string","optional":false,"field":"table"},{"type":"int64","optional":true,"field":"txId"},{"type":"int64","optional":true,"field":"lsn"},{"type":"int64","optional":true,"field":"xmin"}],"optional":false,"name":"io.debezium.connector.postgresql.Source","field":"source"},{"type":"string","optional":false,"field":"op"},{"type":"int64","optional":true,"field":"ts_ms"},{"type":"struct","fields":[{"type":"string","optional":false,"field":"id"},{"type":"int64","optional":false,"field":"total_order"},{"type":"int64","optional":false,"field":"data_collection_order"}],"optional":true,"field":"transaction"}],"optional":false,"name":"dbserver1.public.member.Envelope"},"payload":{"before":null,"after":{"id":936,"status":"active","first_name":"Silvester","last_name":"Jones","date_of_birth":12730,"gender":"m","address_line_1":"1 maple st","address_line_2":"suite 1","address_line_3":null,"city":"Plymouth","state":"New  York","zipcode":"92067","country":"Spain","sponsor_id":2},"source":{"version":"1.7.0.Final","connector":"postgresql","name":"dbserver1","ts_ms":1634309812863,"snapshot":"true","db":"postgres","sequence":"[null,\"34442832\"]","schema":"public","table":"member","txId":615,"lsn":34442832,"xmin":null},"op":"r","ts_ms":1634309812863,"transaction":null}}
+{"schema":{"type":"struct","fields":[{"type":"struct","fields":[{"type":"int32","optional":false,"field":"id"},{"type":"string","optional":true,"field":"status"},{"type":"string","optional":true,"field":"first_name"},{"type":"string","optional":true,"field":"last_name"},{"type":"int32","optional":true,"name":"io.debezium.time.Date","version":1,"field":"date_of_birth"},{"type":"string","optional":true,"field":"gender"},{"type":"string","optional":true,"field":"address_line_1"},{"type":"string","optional":true,"field":"address_line_2"},{"type":"string","optional":true,"field":"address_line_3"},{"type":"string","optional":true,"field":"city"},{"type":"string","optional":true,"field":"state"},{"type":"string","optional":true,"field":"zipcode"},{"type":"string","optional":true,"field":"country"},{"type":"int64","optional":true,"field":"sponsor_id"}],"optional":true,"name":"dbserver1.public.member.Value","field":"before"},{"type":"struct","fields":[{"type":"int32","optional":false,"field":"id"},{"type":"string","optional":true,"field":"status"},{"type":"string","optional":true,"field":"first_name"},{"type":"string","optional":true,"field":"last_name"},{"type":"int32","optional":true,"name":"io.debezium.time.Date","version":1,"field":"date_of_birth"},{"type":"string","optional":true,"field":"gender"},{"type":"string","optional":true,"field":"address_line_1"},{"type":"string","optional":true,"field":"address_line_2"},{"type":"string","optional":true,"field":"address_line_3"},{"type":"string","optional":true,"field":"city"},{"type":"string","optional":true,"field":"state"},{"type":"string","optional":true,"field":"zipcode"},{"type":"string","optional":true,"field":"country"},{"type":"int64","optional":true,"field":"sponsor_id"}],"optional":true,"name":"dbserver1.public.member.Value","field":"after"},{"type":"struct","fields":[{"type":"string","optional":false,"field":"version"},{"type":"string","optional":false,"field":"connector"},{"type":"string","optional":false,"field":"name"},{"type":"int64","optional":false,"field":"ts_ms"},{"type":"string","optional":true,"name":"io.debezium.data.Enum","version":1,"parameters":{"allowed":"true,last,false"},"default":"false","field":"snapshot"},{"type":"string","optional":false,"field":"db"},{"type":"string","optional":true,"field":"sequence"},{"type":"string","optional":false,"field":"schema"},{"type":"string","optional":false,"field":"table"},{"type":"int64","optional":true,"field":"txId"},{"type":"int64","optional":true,"field":"lsn"},{"type":"int64","optional":true,"field":"xmin"}],"optional":false,"name":"io.debezium.connector.postgresql.Source","field":"source"},{"type":"string","optional":false,"field":"op"},{"type":"int64","optional":true,"field":"ts_ms"},{"type":"struct","fields":[{"type":"string","optional":false,"field":"id"},{"type":"int64","optional":false,"field":"total_order"},{"type":"int64","optional":false,"field":"data_collection_order"}],"optional":true,"field":"transaction"}],"optional":false,"name":"dbserver1.public.member.Envelope"},"payload":{"before":null,"after":{"id":937,"status":"canceled","first_name":"Silvester","last_name":"Smith","date_of_birth":13384,"gender":"f","address_line_1":"2 wildflower st","address_line_2":"suite 1","address_line_3":null,"city":"Plymouth","state":"New  York","zipcode":"90209","country":"Spain","sponsor_id":1},"source":{"version":"1.7.0.Final","connector":"postgresql","name":"dbserver1","ts_ms":1634309812863,"snapshot":"true","db":"postgres","sequence":"[null,\"34442832\"]","schema":"public","table":"member","txId":615,"lsn":34442832,"xmin":null},"op":"r","ts_ms":1634309812863,"transaction":null}}
+{"schema":{"type":"struct","fields":[{"type":"struct","fields":[{"type":"int32","optional":false,"field":"id"},{"type":"string","optional":true,"field":"status"},{"type":"string","optional":true,"field":"first_name"},{"type":"string","optional":true,"field":"last_name"},{"type":"int32","optional":true,"name":"io.debezium.time.Date","version":1,"field":"date_of_birth"},{"type":"string","optional":true,"field":"gender"},{"type":"string","optional":true,"field":"address_line_1"},{"type":"string","optional":true,"field":"address_line_2"},{"type":"string","optional":true,"field":"address_line_3"},{"type":"string","optional":true,"field":"city"},{"type":"string","optional":true,"field":"state"},{"type":"string","optional":true,"field":"zipcode"},{"type":"string","optional":true,"field":"country"},{"type":"int64","optional":true,"field":"sponsor_id"}],"optional":true,"name":"dbserver1.public.member.Value","field":"before"},{"type":"struct","fields":[{"type":"int32","optional":false,"field":"id"},{"type":"string","optional":true,"field":"status"},{"type":"string","optional":true,"field":"first_name"},{"type":"string","optional":true,"field":"last_name"},{"type":"int32","optional":true,"name":"io.debezium.time.Date","version":1,"field":"date_of_birth"},{"type":"string","optional":true,"field":"gender"},{"type":"string","optional":true,"field":"address_line_1"},{"type":"string","optional":true,"field":"address_line_2"},{"type":"string","optional":true,"field":"address_line_3"},{"type":"string","optional":true,"field":"city"},{"type":"string","optional":true,"field":"state"},{"type":"string","optional":true,"field":"zipcode"},{"type":"string","optional":true,"field":"country"},{"type":"int64","optional":true,"field":"sponsor_id"}],"optional":true,"name":"dbserver1.public.member.Value","field":"after"},{"type":"struct","fields":[{"type":"string","optional":false,"field":"version"},{"type":"string","optional":false,"field":"connector"},{"type":"string","optional":false,"field":"name"},{"type":"int64","optional":false,"field":"ts_ms"},{"type":"string","optional":true,"name":"io.debezium.data.Enum","version":1,"parameters":{"allowed":"true,last,false"},"default":"false","field":"snapshot"},{"type":"string","optional":false,"field":"db"},{"type":"string","optional":true,"field":"sequence"},{"type":"string","optional":false,"field":"schema"},{"type":"string","optional":false,"field":"table"},{"type":"int64","optional":true,"field":"txId"},{"type":"int64","optional":true,"field":"lsn"},{"type":"int64","optional":true,"field":"xmin"}],"optional":false,"name":"io.debezium.connector.postgresql.Source","field":"source"},{"type":"string","optional":false,"field":"op"},{"type":"int64","optional":true,"field":"ts_ms"},{"type":"struct","fields":[{"type":"string","optional":false,"field":"id"},{"type":"int64","optional":false,"field":"total_order"},{"type":"int64","optional":false,"field":"data_collection_order"}],"optional":true,"field":"transaction"}],"optional":false,"name":"dbserver1.public.member.Envelope"},"payload":{"before":null,"after":{"id":938,"status":"active","first_name":"Tom","last_name":"Smith","date_of_birth":10709,"gender":"m","address_line_1":"1 maple st","address_line_2":"suite 1","address_line_3":null,"city":"Atlanta","state":"Minnesota","zipcode":"10001","country":"United States","sponsor_id":3},"source":{"version":"1.7.0.Final","connector":"postgresql","name":"dbserver1","ts_ms":1634309812863,"snapshot":"true","db":"postgres","sequence":"[null,\"34442832\"]","schema":"public","table":"member","txId":615,"lsn":34442832,"xmin":null},"op":"r","ts_ms":1634309812863,"transaction":null}}
+{"schema":{"type":"struct","fields":[{"type":"struct","fields":[{"type":"int32","optional":false,"field":"id"},{"type":"string","optional":true,"field":"status"},{"type":"string","optional":true,"field":"first_name"},{"type":"string","optional":true,"field":"last_name"},{"type":"int32","optional":true,"name":"io.debezium.time.Date","version":1,"field":"date_of_birth"},{"type":"string","optional":true,"field":"gender"},{"type":"string","optional":true,"field":"address_line_1"},{"type":"string","optional":true,"field":"address_line_2"},{"type":"string","optional":true,"field":"address_line_3"},{"type":"string","optional":true,"field":"city"},{"type":"string","optional":true,"field":"state"},{"type":"string","optional":true,"field":"zipcode"},{"type":"string","optional":true,"field":"country"},{"type":"int64","optional":true,"field":"sponsor_id"}],"optional":true,"name":"dbserver1.public.member.Value","field":"before"},{"type":"struct","fields":[{"type":"int32","optional":false,"field":"id"},{"type":"string","optional":true,"field":"status"},{"type":"string","optional":true,"field":"first_name"},{"type":"string","optional":true,"field":"last_name"},{"type":"int32","optional":true,"name":"io.debezium.time.Date","version":1,"field":"date_of_birth"},{"type":"string","optional":true,"field":"gender"},{"type":"string","optional":true,"field":"address_line_1"},{"type":"string","optional":true,"field":"address_line_2"},{"type":"string","optional":true,"field":"address_line_3"},{"type":"string","optional":true,"field":"city"},{"type":"string","optional":true,"field":"state"},{"type":"string","optional":true,"field":"zipcode"},{"type":"string","optional":true,"field":"country"},{"type":"int64","optional":true,"field":"sponsor_id"}],"optional":true,"name":"dbserver1.public.member.Value","field":"after"},{"type":"struct","fields":[{"type":"string","optional":false,"field":"version"},{"type":"string","optional":false,"field":"connector"},{"type":"string","optional":false,"field":"name"},{"type":"int64","optional":false,"field":"ts_ms"},{"type":"string","optional":true,"name":"io.debezium.data.Enum","version":1,"parameters":{"allowed":"true,last,false"},"default":"false","field":"snapshot"},{"type":"string","optional":false,"field":"db"},{"type":"string","optional":true,"field":"sequence"},{"type":"string","optional":false,"field":"schema"},{"type":"string","optional":false,"field":"table"},{"type":"int64","optional":true,"field":"txId"},{"type":"int64","optional":true,"field":"lsn"},{"type":"int64","optional":true,"field":"xmin"}],"optional":false,"name":"io.debezium.connector.postgresql.Source","field":"source"},{"type":"string","optional":false,"field":"op"},{"type":"int64","optional":true,"field":"ts_ms"},{"type":"struct","fields":[{"type":"string","optional":false,"field":"id"},{"type":"int64","optional":false,"field":"total_order"},{"type":"int64","optional":false,"field":"data_collection_order"}],"optional":true,"field":"transaction"}],"optional":false,"name":"dbserver1.public.member.Envelope"},"payload":{"before":null,"after":{"id":939,"status":"active","first_name":"Jill","last_name":"Milller","date_of_birth":13390,"gender":"f","address_line_1":"2 wildflower st","address_line_2":"suite 1","address_line_3":null,"city":"Decatur","state":"New  York","zipcode":"10001","country":"Spain","sponsor_id":3},"source":{"version":"1.7.0.Final","connector":"postgresql","name":"dbserver1","ts_ms":1634309812863,"snapshot":"true","db":"postgres","sequence":"[null,\"34442832\"]","schema":"public","table":"member","txId":615,"lsn":34442832,"xmin":null},"op":"r","ts_ms":1634309812863,"transaction":null}}
+{"schema":{"type":"struct","fields":[{"type":"struct","fields":[{"type":"int32","optional":false,"field":"id"},{"type":"string","optional":true,"field":"status"},{"type":"string","optional":true,"field":"first_name"},{"type":"string","optional":true,"field":"last_name"},{"type":"int32","optional":true,"name":"io.debezium.time.Date","version":1,"field":"date_of_birth"},{"type":"string","optional":true,"field":"gender"},{"type":"string","optional":true,"field":"address_line_1"},{"type":"string","optional":true,"field":"address_line_2"},{"type":"string","optional":true,"field":"address_line_3"},{"type":"string","optional":true,"field":"city"},{"type":"string","optional":true,"field":"state"},{"type":"string","optional":true,"field":"zipcode"},{"type":"string","optional":true,"field":"country"},{"type":"int64","optional":true,"field":"sponsor_id"}],"optional":true,"name":"dbserver1.public.member.Value","field":"before"},{"type":"struct","fields":[{"type":"int32","optional":false,"field":"id"},{"type":"string","optional":true,"field":"status"},{"type":"string","optional":true,"field":"first_name"},{"type":"string","optional":true,"field":"last_name"},{"type":"int32","optional":true,"name":"io.debezium.time.Date","version":1,"field":"date_of_birth"},{"type":"string","optional":true,"field":"gender"},{"type":"string","optional":true,"field":"address_line_1"},{"type":"string","optional":true,"field":"address_line_2"},{"type":"string","optional":true,"field":"address_line_3"},{"type":"string","optional":true,"field":"city"},{"type":"string","optional":true,"field":"state"},{"type":"string","optional":true,"field":"zipcode"},{"type":"string","optional":true,"field":"country"},{"type":"int64","optional":true,"field":"sponsor_id"}],"optional":true,"name":"dbserver1.public.member.Value","field":"after"},{"type":"struct","fields":[{"type":"string","optional":false,"field":"version"},{"type":"string","optional":false,"field":"connector"},{"type":"string","optional":false,"field":"name"},{"type":"int64","optional":false,"field":"ts_ms"},{"type":"string","optional":true,"name":"io.debezium.data.Enum","version":1,"parameters":{"allowed":"true,last,false"},"default":"false","field":"snapshot"},{"type":"string","optional":false,"field":"db"},{"type":"string","optional":true,"field":"sequence"},{"type":"string","optional":false,"field":"schema"},{"type":"string","optional":false,"field":"table"},{"type":"int64","optional":true,"field":"txId"},{"type":"int64","optional":true,"field":"lsn"},{"type":"int64","optional":true,"field":"xmin"}],"optional":false,"name":"io.debezium.connector.postgresql.Source","field":"source"},{"type":"string","optional":false,"field":"op"},{"type":"int64","optional":true,"field":"ts_ms"},{"type":"struct","fields":[{"type":"string","optional":false,"field":"id"},{"type":"int64","optional":false,"field":"total_order"},{"type":"int64","optional":false,"field":"data_collection_order"}],"optional":true,"field":"transaction"}],"optional":false,"name":"dbserver1.public.member.Envelope"},"payload":{"before":null,"after":{"id":940,"status":"canceled","first_name":"Silvester","last_name":"Jones","date_of_birth":12469,"gender":"m","address_line_1":"1 maple st","address_line_2":"unit 1","address_line_3":null,"city":"Atlanta","state":"Georgia","zipcode":"90209","country":"United States","sponsor_id":1},"source":{"version":"1.7.0.Final","connector":"postgresql","name":"dbserver1","ts_ms":1634309812863,"snapshot":"true","db":"postgres","sequence":"[null,\"34442832\"]","schema":"public","table":"member","txId":615,"lsn":34442832,"xmin":null},"op":"r","ts_ms":1634309812863,"transaction":null}}
+```
+
+### step9: Run KafkaToFhirIngestionApplication.
+
+You would see messages coming through. in spring boot run console. Make changes to db records and observe messages.
+
+I inserted folowing record to member table while app was runnig:
+
+```sh
+| id | status | first\_name | last\_name | date\_of\_birth | gender | address\_line\_1 | address\_line\_2 | address\_line\_3 | city | state | zipcode | country | sponsor\_id |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 9 | active | Jasmine | Page | 2008-01-29 | male | 3 hunter ln | suite 1 | NULL | Decatur | New  York | 92067 | Spain | 3 |
+
+```
+
+application output:
+
+```sh
+...
+
+2021-10-15 12:20:43.635  INFO 63399 --- [pool-1-thread-1] o.a.kafka.common.utils.AppInfoParser     : Kafka version: 2.7.1
+2021-10-15 12:20:43.635  INFO 63399 --- [pool-1-thread-1] o.a.kafka.common.utils.AppInfoParser     : Kafka commitId: 61dbce85d0d41457
+2021-10-15 12:20:43.635  INFO 63399 --- [pool-1-thread-1] o.a.kafka.common.utils.AppInfoParser     : Kafka startTimeMs: 1634318443635
+2021-10-15 12:20:43.637  INFO 63399 --- [pool-1-thread-1] org.apache.kafka.clients.Metadata        : [Consumer clientId=consumer-input-group-1-4, groupId=input-group-1] Cluster ID: bGrG2fchQe6rXjnRBTiTag
+2021-10-15 12:20:43.646  INFO 63399 --- [pool-1-thread-1] o.a.k.c.c.internals.AbstractCoordinator  : [Consumer clientId=consumer-input-group-1-4, groupId=input-group-1] Discovered group coordinator localhost:9092 (id: 2147483647 rack: null)
+2021-10-15 12:21:36.143  INFO 63399 --- [container-0-C-1] ication$$EnhancerBySpringCGLIB$$c481ff26 : received a message  of type c for member id: 7 
+2021-10-15 12:21:40.074  INFO 63399 --- [container-0-C-1] ication$$EnhancerBySpringCGLIB$$c481ff26 : output create : http://localhost:8080/fhir/Patient/53/_history/1 
+2021-10-15 12:21:40.075  INFO 63399 --- [container-0-C-1] ication$$EnhancerBySpringCGLIB$$c481ff26 : processing complete.
+
+```
+
+Note the fhir patient id from above url: `http://localhost:8080/fhir/Patient/53/_history/1`
+
+
+Now check if it was created in fhir backend: **GET http://localhost:8080/fhir/Patient/53/**
+
+output:
+
+```json
+{
+    "resourceType": "Patient",
+    "id": "56",
+    "meta": {
+        "versionId": "2",
+        "lastUpdated": "2021-10-15T19:11:17.973+00:00",
+        "source": "#17Uh6xUpIYgG4kMb"
+    },
+    "text": {
+        "status": "generated",
+        "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\"><div class=\"hapiHeaderText\">Jasmine </div><table class=\"hapiPropertyTable\"><tbody><tr><td>Identifier</td><td>9</td></tr><tr><td>Address</td><td><span>3 hunter ln </span><br/></td></tr><tr><td>Date of birth</td><td><span>31 December 1969</span></td></tr></tbody></table></div>"
+    },
+    "identifier": [
+        {
+            "system": "VP",
+            "value": "9"
+        }
+    ],
+    "active": false,
+    "name": [
+        {
+            "given": [
+                "Jasmine"
+            ]
+        },
+        {
+            "family": "Page"
+        }
+    ],
+    "gender": "female",
+    "birthDate": "1969-12-31",
+    "address": [
+        {
+            "line": [
+                "3 hunter ln"
+            ]
+        },
+        {
+            "line": [
+                "suite 1"
+            ]
+        },
+        {
+            "city": "Decatur"
+        },
+        {
+            "state": "New  York"
+        },
+        {
+            "postalCode": "92067"
+        }
+    ]
+}
+```
+
+Note fhir patient resource id is **56** because fhir generate a patient_uuid.
+
+
+Now let's update that db record ast name to "Brown":
+```sh
+| id | status | first\_name | last\_name | date\_of\_birth | gender | address\_line\_1 | address\_line\_2 | address\_line\_3 | city | state | zipcode | country | sponsor\_id |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 9 | canceled | Jasmine | Brown | 2008-01-29 | female | 3 hunter ln | suite 1 | NULL | Decatur | New  York | 92067 | Spain | 3 |
+```
+
+app output:
+```sh
+2021-10-15 14:15:51.677  INFO 68288 --- [container-0-C-1] lication$$EnhancerBySpringCGLIB$$61387d4 : received a message  of type u for member id: 9 
+2021-10-15 14:15:51.827  INFO 68288 --- [container-0-C-1] lication$$EnhancerBySpringCGLIB$$61387d4 : output update : http://localhost:8080/fhir/Patient/56/_history/3 
+2021-10-15 14:15:51.827  INFO 68288 --- [container-0-C-1] lication$$EnhancerBySpringCGLIB$$61387d4 : processing complete.
+```
+
+It is reflected in fhir api:
+
+**GET http://localhost:8080/fhir/Patient/56**:
+
+ouptput:
+```sh
+{
+    "resourceType": "Patient",
+    "id": "56",
+    "meta": {
+        "versionId": "2",
+        "lastUpdated": "2021-10-15T19:11:17.973+00:00",
+        "source": "#17Uh6xUpIYgG4kMb"
+    },
+    "text": {
+        "status": "generated",
+        "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\"><div class=\"hapiHeaderText\">Jasmine </div><table class=\"hapiPropertyTable\"><tbody><tr><td>Identifier</td><td>9</td></tr><tr><td>Address</td><td><span>3 hunter ln </span><br/></td></tr><tr><td>Date of birth</td><td><span>31 December 1969</span></td></tr></tbody></table></div>"
+    },
+    "identifier": [
+        {
+            "system": "VP",
+            "value": "9"
+        }
+    ],
+    "active": false,
+    "name": [
+        {
+            "given": [
+                "Jasmine"
+            ]
+        },
+        {
+            "family": "Page"
+        }
+    ],
+    "gender": "female",
+    "birthDate": "1969-12-31",
+    "address": [
+        {
+            "line": [
+                "3 hunter ln"
+            ]
+        },
+        {
+            "line": [
+                "suite 1"
+            ]
+        },
+        {
+            "city": "Decatur"
+        },
+        {
+            "state": "New  York"
+        },
+        {
+            "postalCode": "92067"
+        }
+    ]
+}
+```
+
+same goes for update and delete.
+
+
+## DOCKER KAFKA DEBEZIUM CDC SETUP  (connection to bootstrap server from spring boot didnt work)
+
 **Note**
 - accessing kafka bootrstap server using springboot (application.yml) did not workout
 - cdcing data from a postgres table to kafka topic worked out
-- 
-## Set up cdc from postgres member table to kafka
-
-
+## Set up cdc from postgres member table to kafka using debezium
 
 1. Start a PostgreSQL instance:
 2. Create database, member table
@@ -126,21 +450,21 @@ output:
 ```json
 {
   "name":"genesis-connector",
-  "config":     
-    {
-      "connector.class":"io.debezium.connector.postgresql.PostgresConnector",
-      "tasks.max":"1",
-      "database.hostname":"postgres",
-      "database.port":"25432",
-      "database.user":"postgres",
-      "database.password":"postgres",
-      "database.dbname":"postgres",
-      "database.server.name":"dbserver1",
-      "database.whitelist":"genesis",
-      "database.history.kafka.bootstrap.servers":"kafka:9092",
-      "database.history.kafka.topic":"schema-changes.genesis",
-      "name":"genesis-connector"
-    },
+  "config":
+  {
+    "connector.class":"io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max":"1",
+    "database.hostname":"postgres",
+    "database.port":"25432",
+    "database.user":"postgres",
+    "database.password":"postgres",
+    "database.dbname":"postgres",
+    "database.server.name":"dbserver1",
+    "database.whitelist":"genesis",
+    "database.history.kafka.bootstrap.servers":"kafka:9092",
+    "database.history.kafka.topic":"schema-changes.genesis",
+    "name":"genesis-connector"
+  },
   "tasks":[],
   "type":"source"
 }%
@@ -287,645 +611,645 @@ Once watcher is run Y\you can now see load of (op: "r") of first load table reco
 ```json
 //RECORD 1: key
 {
-"schema": {
-"type": "struct",
-"fields": [
-{
-"type": "int64",
-"optional": false,
-"field": "id"
-}
-],
-"optional": false,
-"name": "dbserver1.public.member.Key"
-},
-"payload": {
-"id": 141418
-}
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {
+        "type": "int64",
+        "optional": false,
+        "field": "id"
+      }
+    ],
+    "optional": false,
+    "name": "dbserver1.public.member.Key"
+  },
+  "payload": {
+    "id": 141418
+  }
 }
 
 //RECORD 1: value
 
 {
-"schema": {
-"type": "struct",
-"fields": [
-{
-"type": "struct",
-"fields": [
-{
-"type": "int64",
-"optional": false,
-"field": "id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "first_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "last_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "display_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "profile_picture"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "date_of_birth"
-},
-{
-"type": "string",
-"optional": false,
-"field": "email_address"
-},
-{
-"type": "boolean",
-"optional": false,
-"field": "is_deleted"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "vhm_legacy_id"
-},
-{
-"type": "string",
-"optional": false,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "created_date"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "updated_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender"
-},
-{
-"type": "string",
-"optional": true,
-"field": "background_image"
-},
-{
-"type": "string",
-"optional": true,
-"field": "words_to_live_by"
-},
-{
-"type": "string",
-"optional": true,
-"field": "my_bio"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "sponsor_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "timezone_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "language"
-},
-{
-"type": "string",
-"optional": true,
-"field": "unit_of_measurement"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "business_unit_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "office_id"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_wizard_form_completed"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_internal"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "member_settings_id"
-},
-{
-"type": "string",
-"optional": false,
-"field": "status"
-},
-{
-"type": "string",
-"optional": true,
-"field": "title"
-},
-{
-"type": "string",
-"optional": true,
-"field": "department"
-},
-{
-"type": "string",
-"optional": true,
-"field": "location"
-},
-{
-"type": "string",
-"optional": false,
-"field": "type"
-},
-{
-"type": "string",
-"optional": true,
-"field": "country"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "hire_date"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "original_hire_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "employee_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "division"
-},
-{
-"type": "int32",
-"optional": true,
-"field": "failed_security_question_count"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "security_question_lockout"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "country_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "user_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "phone_number"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender_identity"
-},
-{
-"type": "string",
-"optional": true,
-"field": "external_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "state_id"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "enrollment_date"
-}
-],
-"optional": true,
-"name": "dbserver1.public.member.Value",
-"field": "before"
-},
-{
-"type": "struct",
-"fields": [
-{
-"type": "int64",
-"optional": false,
-"field": "id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "first_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "last_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "display_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "profile_picture"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "date_of_birth"
-},
-{
-"type": "string",
-"optional": false,
-"field": "email_address"
-},
-{
-"type": "boolean",
-"optional": false,
-"field": "is_deleted"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "vhm_legacy_id"
-},
-{
-"type": "string",
-"optional": false,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "created_date"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "updated_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender"
-},
-{
-"type": "string",
-"optional": true,
-"field": "background_image"
-},
-{
-"type": "string",
-"optional": true,
-"field": "words_to_live_by"
-},
-{
-"type": "string",
-"optional": true,
-"field": "my_bio"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "sponsor_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "timezone_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "language"
-},
-{
-"type": "string",
-"optional": true,
-"field": "unit_of_measurement"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "business_unit_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "office_id"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_wizard_form_completed"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_internal"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "member_settings_id"
-},
-{
-"type": "string",
-"optional": false,
-"field": "status"
-},
-{
-"type": "string",
-"optional": true,
-"field": "title"
-},
-{
-"type": "string",
-"optional": true,
-"field": "department"
-},
-{
-"type": "string",
-"optional": true,
-"field": "location"
-},
-{
-"type": "string",
-"optional": false,
-"field": "type"
-},
-{
-"type": "string",
-"optional": true,
-"field": "country"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "hire_date"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "original_hire_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "employee_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "division"
-},
-{
-"type": "int32",
-"optional": true,
-"field": "failed_security_question_count"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "security_question_lockout"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "country_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "user_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "phone_number"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender_identity"
-},
-{
-"type": "string",
-"optional": true,
-"field": "external_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "state_id"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "enrollment_date"
-}
-],
-"optional": true,
-"name": "dbserver1.public.member.Value",
-"field": "after"
-},
-{
-"type": "struct",
-"fields": [
-{
-"type": "string",
-"optional": false,
-"field": "version"
-},
-{
-"type": "string",
-"optional": false,
-"field": "connector"
-},
-{
-"type": "string",
-"optional": false,
-"field": "name"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "ts_ms"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.data.Enum",
-"version": 1,
-"parameters": {
-"allowed": "true,last,false"
-},
-"default": "false",
-"field": "snapshot"
-},
-{
-"type": "string",
-"optional": false,
-"field": "db"
-},
-{
-"type": "string",
-"optional": false,
-"field": "schema"
-},
-{
-"type": "string",
-"optional": false,
-"field": "table"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "txId"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "lsn"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "xmin"
-}
-],
-"optional": false,
-"name": "io.debezium.connector.postgresql.Source",
-"field": "source"
-},
-{
-"type": "string",
-"optional": false,
-"field": "op"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "ts_ms"
-}
-],
-"optional": false,
-"name": "dbserver1.public.member.Envelope"
-},
-"payload": {
-"before": null,
-"after": {
-"id": 141418,
-"first_name": "Jasenko",
-"last_name": "Hadziomeragic",
-"display_name": "Jasenko Hadziomeragic",
-"profile_picture": "https://mashauth1.virginhealthmiles.com/images/ce64b453-f1a1-4f91-b450-20b7c11de5c0.gif",
-"date_of_birth": 6669,
-"email_address": "test111@live.com",
-"is_deleted": false,
-"vhm_legacy_id": 133227,
-"created_date": "2014-12-16T15:39:24.866Z",
-"updated_date": "2019-12-13T16:12:52.555Z",
-"gender": "M",
-"background_image": null,
-"words_to_live_by": null,
-"my_bio": null,
-"sponsor_id": 38383,
-"timezone_id": 35,
-"language": "en_us",
-"unit_of_measurement": "Imperial",
-"business_unit_id": null,
-"office_id": null,
-"is_wizard_form_completed": null,
-"is_internal": false,
-"member_settings_id": 8606,
-"status": "Cancelled",
-"title": null,
-"department": null,
-"location": null,
-"type": "Primary",
-"country": null,
-"hire_date": null,
-"original_hire_date": null,
-"employee_id": null,
-"division": null,
-"failed_security_question_count": null,
-"security_question_lockout": null,
-"country_id": null,
-"user_name": null,
-"phone_number": null,
-"gender_identity": "Male",
-"external_id": "46d790dc7e7283c169e5fa201d7e39ee",
-"state_id": null,
-"enrollment_date": "2014-12-16T15:39:24.866Z"
-},
-"source": {
-"version": "1.0.2.Final",
-"connector": "postgresql",
-"name": "dbserver1",
-"ts_ms": 1584551957919,
-"snapshot": "last",
-"db": "genesis",
-"schema": "public",
-"table": "member",
-"txId": 605,
-"lsn": 34198640,
-"xmin": null
-},
-"op": "r",
-"ts_ms": 1584551957926
-}
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "first_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "last_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "display_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "profile_picture"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "date_of_birth"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "email_address"
+          },
+          {
+            "type": "boolean",
+            "optional": false,
+            "field": "is_deleted"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "vhm_legacy_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "created_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "updated_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "background_image"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "words_to_live_by"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "my_bio"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "sponsor_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "timezone_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "language"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "unit_of_measurement"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "business_unit_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "office_id"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_wizard_form_completed"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_internal"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "member_settings_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "status"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "title"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "department"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "location"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "type"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "country"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "hire_date"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "original_hire_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "employee_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "division"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "field": "failed_security_question_count"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "security_question_lockout"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "country_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "user_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "phone_number"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender_identity"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "external_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "state_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "enrollment_date"
+          }
+        ],
+        "optional": true,
+        "name": "dbserver1.public.member.Value",
+        "field": "before"
+      },
+      {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "first_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "last_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "display_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "profile_picture"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "date_of_birth"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "email_address"
+          },
+          {
+            "type": "boolean",
+            "optional": false,
+            "field": "is_deleted"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "vhm_legacy_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "created_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "updated_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "background_image"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "words_to_live_by"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "my_bio"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "sponsor_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "timezone_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "language"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "unit_of_measurement"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "business_unit_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "office_id"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_wizard_form_completed"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_internal"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "member_settings_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "status"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "title"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "department"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "location"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "type"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "country"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "hire_date"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "original_hire_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "employee_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "division"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "field": "failed_security_question_count"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "security_question_lockout"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "country_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "user_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "phone_number"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender_identity"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "external_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "state_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "enrollment_date"
+          }
+        ],
+        "optional": true,
+        "name": "dbserver1.public.member.Value",
+        "field": "after"
+      },
+      {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "string",
+            "optional": false,
+            "field": "version"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "connector"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "name"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "ts_ms"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.data.Enum",
+            "version": 1,
+            "parameters": {
+              "allowed": "true,last,false"
+            },
+            "default": "false",
+            "field": "snapshot"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "db"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "schema"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "table"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "txId"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "lsn"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "xmin"
+          }
+        ],
+        "optional": false,
+        "name": "io.debezium.connector.postgresql.Source",
+        "field": "source"
+      },
+      {
+        "type": "string",
+        "optional": false,
+        "field": "op"
+      },
+      {
+        "type": "int64",
+        "optional": true,
+        "field": "ts_ms"
+      }
+    ],
+    "optional": false,
+    "name": "dbserver1.public.member.Envelope"
+  },
+  "payload": {
+    "before": null,
+    "after": {
+      "id": 141418,
+      "first_name": "Jasenko",
+      "last_name": "Hadziomeragic",
+      "display_name": "Jasenko Hadziomeragic",
+      "profile_picture": "https://mashauth1.virginhealthmiles.com/images/ce64b453-f1a1-4f91-b450-20b7c11de5c0.gif",
+      "date_of_birth": 6669,
+      "email_address": "test111@live.com",
+      "is_deleted": false,
+      "vhm_legacy_id": 133227,
+      "created_date": "2014-12-16T15:39:24.866Z",
+      "updated_date": "2019-12-13T16:12:52.555Z",
+      "gender": "M",
+      "background_image": null,
+      "words_to_live_by": null,
+      "my_bio": null,
+      "sponsor_id": 38383,
+      "timezone_id": 35,
+      "language": "en_us",
+      "unit_of_measurement": "Imperial",
+      "business_unit_id": null,
+      "office_id": null,
+      "is_wizard_form_completed": null,
+      "is_internal": false,
+      "member_settings_id": 8606,
+      "status": "Cancelled",
+      "title": null,
+      "department": null,
+      "location": null,
+      "type": "Primary",
+      "country": null,
+      "hire_date": null,
+      "original_hire_date": null,
+      "employee_id": null,
+      "division": null,
+      "failed_security_question_count": null,
+      "security_question_lockout": null,
+      "country_id": null,
+      "user_name": null,
+      "phone_number": null,
+      "gender_identity": "Male",
+      "external_id": "46d790dc7e7283c169e5fa201d7e39ee",
+      "state_id": null,
+      "enrollment_date": "2014-12-16T15:39:24.866Z"
+    },
+    "source": {
+      "version": "1.0.2.Final",
+      "connector": "postgresql",
+      "name": "dbserver1",
+      "ts_ms": 1584551957919,
+      "snapshot": "last",
+      "db": "genesis",
+      "schema": "public",
+      "table": "member",
+      "txId": 605,
+      "lsn": 34198640,
+      "xmin": null
+    },
+    "op": "r",
+    "ts_ms": 1584551957926
+  }
 }
 ```
 
@@ -947,644 +1271,644 @@ output from watcher (op: u for update):
 ```json
 //RECORD 1: key
 {
-"schema": {
-"type": "struct",
-"fields": [
-{
-"type": "int64",
-"optional": false,
-"field": "id"
-}
-],
-"optional": false,
-"name": "dbserver1.public.member.Key"
-},
-"payload": {
-"id": 141418
-}
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {
+        "type": "int64",
+        "optional": false,
+        "field": "id"
+      }
+    ],
+    "optional": false,
+    "name": "dbserver1.public.member.Key"
+  },
+  "payload": {
+    "id": 141418
+  }
 }
 
 //RECORD 1: value
 {
-"schema": {
-"type": "struct",
-"fields": [
-{
-"type": "struct",
-"fields": [
-{
-"type": "int64",
-"optional": false,
-"field": "id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "first_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "last_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "display_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "profile_picture"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "date_of_birth"
-},
-{
-"type": "string",
-"optional": false,
-"field": "email_address"
-},
-{
-"type": "boolean",
-"optional": false,
-"field": "is_deleted"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "vhm_legacy_id"
-},
-{
-"type": "string",
-"optional": false,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "created_date"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "updated_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender"
-},
-{
-"type": "string",
-"optional": true,
-"field": "background_image"
-},
-{
-"type": "string",
-"optional": true,
-"field": "words_to_live_by"
-},
-{
-"type": "string",
-"optional": true,
-"field": "my_bio"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "sponsor_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "timezone_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "language"
-},
-{
-"type": "string",
-"optional": true,
-"field": "unit_of_measurement"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "business_unit_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "office_id"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_wizard_form_completed"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_internal"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "member_settings_id"
-},
-{
-"type": "string",
-"optional": false,
-"field": "status"
-},
-{
-"type": "string",
-"optional": true,
-"field": "title"
-},
-{
-"type": "string",
-"optional": true,
-"field": "department"
-},
-{
-"type": "string",
-"optional": true,
-"field": "location"
-},
-{
-"type": "string",
-"optional": false,
-"field": "type"
-},
-{
-"type": "string",
-"optional": true,
-"field": "country"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "hire_date"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "original_hire_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "employee_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "division"
-},
-{
-"type": "int32",
-"optional": true,
-"field": "failed_security_question_count"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "security_question_lockout"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "country_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "user_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "phone_number"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender_identity"
-},
-{
-"type": "string",
-"optional": true,
-"field": "external_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "state_id"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "enrollment_date"
-}
-],
-"optional": true,
-"name": "dbserver1.public.member.Value",
-"field": "before"
-},
-{
-"type": "struct",
-"fields": [
-{
-"type": "int64",
-"optional": false,
-"field": "id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "first_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "last_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "display_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "profile_picture"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "date_of_birth"
-},
-{
-"type": "string",
-"optional": false,
-"field": "email_address"
-},
-{
-"type": "boolean",
-"optional": false,
-"field": "is_deleted"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "vhm_legacy_id"
-},
-{
-"type": "string",
-"optional": false,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "created_date"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "updated_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender"
-},
-{
-"type": "string",
-"optional": true,
-"field": "background_image"
-},
-{
-"type": "string",
-"optional": true,
-"field": "words_to_live_by"
-},
-{
-"type": "string",
-"optional": true,
-"field": "my_bio"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "sponsor_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "timezone_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "language"
-},
-{
-"type": "string",
-"optional": true,
-"field": "unit_of_measurement"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "business_unit_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "office_id"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_wizard_form_completed"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_internal"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "member_settings_id"
-},
-{
-"type": "string",
-"optional": false,
-"field": "status"
-},
-{
-"type": "string",
-"optional": true,
-"field": "title"
-},
-{
-"type": "string",
-"optional": true,
-"field": "department"
-},
-{
-"type": "string",
-"optional": true,
-"field": "location"
-},
-{
-"type": "string",
-"optional": false,
-"field": "type"
-},
-{
-"type": "string",
-"optional": true,
-"field": "country"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "hire_date"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "original_hire_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "employee_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "division"
-},
-{
-"type": "int32",
-"optional": true,
-"field": "failed_security_question_count"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "security_question_lockout"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "country_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "user_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "phone_number"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender_identity"
-},
-{
-"type": "string",
-"optional": true,
-"field": "external_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "state_id"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "enrollment_date"
-}
-],
-"optional": true,
-"name": "dbserver1.public.member.Value",
-"field": "after"
-},
-{
-"type": "struct",
-"fields": [
-{
-"type": "string",
-"optional": false,
-"field": "version"
-},
-{
-"type": "string",
-"optional": false,
-"field": "connector"
-},
-{
-"type": "string",
-"optional": false,
-"field": "name"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "ts_ms"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.data.Enum",
-"version": 1,
-"parameters": {
-"allowed": "true,last,false"
-},
-"default": "false",
-"field": "snapshot"
-},
-{
-"type": "string",
-"optional": false,
-"field": "db"
-},
-{
-"type": "string",
-"optional": false,
-"field": "schema"
-},
-{
-"type": "string",
-"optional": false,
-"field": "table"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "txId"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "lsn"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "xmin"
-}
-],
-"optional": false,
-"name": "io.debezium.connector.postgresql.Source",
-"field": "source"
-},
-{
-"type": "string",
-"optional": false,
-"field": "op"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "ts_ms"
-}
-],
-"optional": false,
-"name": "dbserver1.public.member.Envelope"
-},
-"payload": {
-"before": null,
-"after": {
-"id": 141418,
-"first_name": "Jasenk",
-"last_name": "Hadziomeragic M",
-"display_name": "Jasenko Hadziomeragic",
-"profile_picture": "https://mashauth1.virginhealthmiles.com/images/ce64b453-f1a1-4f91-b450-20b7c11de5c0.gif",
-"date_of_birth": 6669,
-"email_address": "test111@live.com",
-"is_deleted": false,
-"vhm_legacy_id": 133227,
-"created_date": "2014-12-16T15:39:24.866Z",
-"updated_date": "2019-12-13T16:12:52.555Z",
-"gender": "M",
-"background_image": null,
-"words_to_live_by": null,
-"my_bio": null,
-"sponsor_id": 38383,
-"timezone_id": 35,
-"language": "en_us",
-"unit_of_measurement": "Imperial",
-"business_unit_id": null,
-"office_id": null,
-"is_wizard_form_completed": null,
-"is_internal": false,
-"member_settings_id": 8606,
-"status": "Cancelled",
-"title": null,
-"department": null,
-"location": null,
-"type": "Primary",
-"country": null,
-"hire_date": null,
-"original_hire_date": null,
-"employee_id": null,
-"division": null,
-"failed_security_question_count": null,
-"security_question_lockout": null,
-"country_id": null,
-"user_name": null,
-"phone_number": null,
-"gender_identity": "Male",
-"external_id": "46d790dc7e7283c169e5fa201d7e39ee",
-"state_id": null,
-"enrollment_date": "2014-12-16T15:39:24.866Z"
-},
-"source": {
-"version": "1.0.2.Final",
-"connector": "postgresql",
-"name": "dbserver1",
-"ts_ms": 1584552981723,
-"snapshot": "false",
-"db": "genesis",
-"schema": "public",
-"table": "member",
-"txId": 606,
-"lsn": 34198960,
-"xmin": null
-},
-"op": "u",
-"ts_ms": 1584552981822
-}
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "first_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "last_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "display_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "profile_picture"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "date_of_birth"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "email_address"
+          },
+          {
+            "type": "boolean",
+            "optional": false,
+            "field": "is_deleted"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "vhm_legacy_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "created_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "updated_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "background_image"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "words_to_live_by"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "my_bio"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "sponsor_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "timezone_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "language"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "unit_of_measurement"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "business_unit_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "office_id"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_wizard_form_completed"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_internal"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "member_settings_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "status"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "title"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "department"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "location"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "type"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "country"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "hire_date"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "original_hire_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "employee_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "division"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "field": "failed_security_question_count"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "security_question_lockout"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "country_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "user_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "phone_number"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender_identity"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "external_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "state_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "enrollment_date"
+          }
+        ],
+        "optional": true,
+        "name": "dbserver1.public.member.Value",
+        "field": "before"
+      },
+      {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "first_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "last_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "display_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "profile_picture"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "date_of_birth"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "email_address"
+          },
+          {
+            "type": "boolean",
+            "optional": false,
+            "field": "is_deleted"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "vhm_legacy_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "created_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "updated_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "background_image"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "words_to_live_by"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "my_bio"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "sponsor_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "timezone_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "language"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "unit_of_measurement"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "business_unit_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "office_id"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_wizard_form_completed"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_internal"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "member_settings_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "status"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "title"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "department"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "location"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "type"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "country"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "hire_date"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "original_hire_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "employee_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "division"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "field": "failed_security_question_count"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "security_question_lockout"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "country_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "user_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "phone_number"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender_identity"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "external_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "state_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "enrollment_date"
+          }
+        ],
+        "optional": true,
+        "name": "dbserver1.public.member.Value",
+        "field": "after"
+      },
+      {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "string",
+            "optional": false,
+            "field": "version"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "connector"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "name"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "ts_ms"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.data.Enum",
+            "version": 1,
+            "parameters": {
+              "allowed": "true,last,false"
+            },
+            "default": "false",
+            "field": "snapshot"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "db"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "schema"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "table"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "txId"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "lsn"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "xmin"
+          }
+        ],
+        "optional": false,
+        "name": "io.debezium.connector.postgresql.Source",
+        "field": "source"
+      },
+      {
+        "type": "string",
+        "optional": false,
+        "field": "op"
+      },
+      {
+        "type": "int64",
+        "optional": true,
+        "field": "ts_ms"
+      }
+    ],
+    "optional": false,
+    "name": "dbserver1.public.member.Envelope"
+  },
+  "payload": {
+    "before": null,
+    "after": {
+      "id": 141418,
+      "first_name": "Jasenk",
+      "last_name": "Hadziomeragic M",
+      "display_name": "Jasenko Hadziomeragic",
+      "profile_picture": "https://mashauth1.virginhealthmiles.com/images/ce64b453-f1a1-4f91-b450-20b7c11de5c0.gif",
+      "date_of_birth": 6669,
+      "email_address": "test111@live.com",
+      "is_deleted": false,
+      "vhm_legacy_id": 133227,
+      "created_date": "2014-12-16T15:39:24.866Z",
+      "updated_date": "2019-12-13T16:12:52.555Z",
+      "gender": "M",
+      "background_image": null,
+      "words_to_live_by": null,
+      "my_bio": null,
+      "sponsor_id": 38383,
+      "timezone_id": 35,
+      "language": "en_us",
+      "unit_of_measurement": "Imperial",
+      "business_unit_id": null,
+      "office_id": null,
+      "is_wizard_form_completed": null,
+      "is_internal": false,
+      "member_settings_id": 8606,
+      "status": "Cancelled",
+      "title": null,
+      "department": null,
+      "location": null,
+      "type": "Primary",
+      "country": null,
+      "hire_date": null,
+      "original_hire_date": null,
+      "employee_id": null,
+      "division": null,
+      "failed_security_question_count": null,
+      "security_question_lockout": null,
+      "country_id": null,
+      "user_name": null,
+      "phone_number": null,
+      "gender_identity": "Male",
+      "external_id": "46d790dc7e7283c169e5fa201d7e39ee",
+      "state_id": null,
+      "enrollment_date": "2014-12-16T15:39:24.866Z"
+    },
+    "source": {
+      "version": "1.0.2.Final",
+      "connector": "postgresql",
+      "name": "dbserver1",
+      "ts_ms": 1584552981723,
+      "snapshot": "false",
+      "db": "genesis",
+      "schema": "public",
+      "table": "member",
+      "txId": 606,
+      "lsn": 34198960,
+      "xmin": null
+    },
+    "op": "u",
+    "ts_ms": 1584552981822
+  }
 }
 ```
 
@@ -1605,644 +1929,644 @@ output from watcher (op: c for insert/create):
 ```json
 //RECORD 2: key
 {
-"schema": {
-"type": "struct",
-"fields": [
-{
-"type": "int64",
-"optional": false,
-"field": "id"
-}
-],
-"optional": false,
-"name": "dbserver1.public.member.Key"
-},
-"payload": {
-"id": 2265
-}
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {
+        "type": "int64",
+        "optional": false,
+        "field": "id"
+      }
+    ],
+    "optional": false,
+    "name": "dbserver1.public.member.Key"
+  },
+  "payload": {
+    "id": 2265
+  }
 }'
 
 //RECORD 2: value
 {
-"schema": {
-"type": "struct",
-"fields": [
-{
-"type": "struct",
-"fields": [
-{
-"type": "int64",
-"optional": false,
-"field": "id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "first_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "last_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "display_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "profile_picture"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "date_of_birth"
-},
-{
-"type": "string",
-"optional": false,
-"field": "email_address"
-},
-{
-"type": "boolean",
-"optional": false,
-"field": "is_deleted"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "vhm_legacy_id"
-},
-{
-"type": "string",
-"optional": false,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "created_date"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "updated_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender"
-},
-{
-"type": "string",
-"optional": true,
-"field": "background_image"
-},
-{
-"type": "string",
-"optional": true,
-"field": "words_to_live_by"
-},
-{
-"type": "string",
-"optional": true,
-"field": "my_bio"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "sponsor_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "timezone_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "language"
-},
-{
-"type": "string",
-"optional": true,
-"field": "unit_of_measurement"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "business_unit_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "office_id"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_wizard_form_completed"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_internal"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "member_settings_id"
-},
-{
-"type": "string",
-"optional": false,
-"field": "status"
-},
-{
-"type": "string",
-"optional": true,
-"field": "title"
-},
-{
-"type": "string",
-"optional": true,
-"field": "department"
-},
-{
-"type": "string",
-"optional": true,
-"field": "location"
-},
-{
-"type": "string",
-"optional": false,
-"field": "type"
-},
-{
-"type": "string",
-"optional": true,
-"field": "country"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "hire_date"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "original_hire_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "employee_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "division"
-},
-{
-"type": "int32",
-"optional": true,
-"field": "failed_security_question_count"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "security_question_lockout"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "country_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "user_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "phone_number"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender_identity"
-},
-{
-"type": "string",
-"optional": true,
-"field": "external_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "state_id"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "enrollment_date"
-}
-],
-"optional": true,
-"name": "dbserver1.public.member.Value",
-"field": "before"
-},
-{
-"type": "struct",
-"fields": [
-{
-"type": "int64",
-"optional": false,
-"field": "id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "first_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "last_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "display_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "profile_picture"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "date_of_birth"
-},
-{
-"type": "string",
-"optional": false,
-"field": "email_address"
-},
-{
-"type": "boolean",
-"optional": false,
-"field": "is_deleted"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "vhm_legacy_id"
-},
-{
-"type": "string",
-"optional": false,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "created_date"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "updated_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender"
-},
-{
-"type": "string",
-"optional": true,
-"field": "background_image"
-},
-{
-"type": "string",
-"optional": true,
-"field": "words_to_live_by"
-},
-{
-"type": "string",
-"optional": true,
-"field": "my_bio"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "sponsor_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "timezone_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "language"
-},
-{
-"type": "string",
-"optional": true,
-"field": "unit_of_measurement"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "business_unit_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "office_id"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_wizard_form_completed"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_internal"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "member_settings_id"
-},
-{
-"type": "string",
-"optional": false,
-"field": "status"
-},
-{
-"type": "string",
-"optional": true,
-"field": "title"
-},
-{
-"type": "string",
-"optional": true,
-"field": "department"
-},
-{
-"type": "string",
-"optional": true,
-"field": "location"
-},
-{
-"type": "string",
-"optional": false,
-"field": "type"
-},
-{
-"type": "string",
-"optional": true,
-"field": "country"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "hire_date"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "original_hire_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "employee_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "division"
-},
-{
-"type": "int32",
-"optional": true,
-"field": "failed_security_question_count"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "security_question_lockout"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "country_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "user_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "phone_number"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender_identity"
-},
-{
-"type": "string",
-"optional": true,
-"field": "external_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "state_id"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "enrollment_date"
-}
-],
-"optional": true,
-"name": "dbserver1.public.member.Value",
-"field": "after"
-},
-{
-"type": "struct",
-"fields": [
-{
-"type": "string",
-"optional": false,
-"field": "version"
-},
-{
-"type": "string",
-"optional": false,
-"field": "connector"
-},
-{
-"type": "string",
-"optional": false,
-"field": "name"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "ts_ms"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.data.Enum",
-"version": 1,
-"parameters": {
-"allowed": "true,last,false"
-},
-"default": "false",
-"field": "snapshot"
-},
-{
-"type": "string",
-"optional": false,
-"field": "db"
-},
-{
-"type": "string",
-"optional": false,
-"field": "schema"
-},
-{
-"type": "string",
-"optional": false,
-"field": "table"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "txId"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "lsn"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "xmin"
-}
-],
-"optional": false,
-"name": "io.debezium.connector.postgresql.Source",
-"field": "source"
-},
-{
-"type": "string",
-"optional": false,
-"field": "op"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "ts_ms"
-}
-],
-"optional": false,
-"name": "dbserver1.public.member.Envelope"
-},
-"payload": {
-"before": null,
-"after": {
-"id": 2265,
-"first_name": "Tony",
-"last_name": "Parker",
-"display_name": "Tony Parker",
-"profile_picture": "https://qaauth1.virginhealthmiles.com/images/ce64b453-f1a1-4f91-b450-20b7c11de5c0.gif",
-"date_of_birth": null,
-"email_address": "tonyPvP@gmail.com",
-"is_deleted": false,
-"vhm_legacy_id": 134295,
-"created_date": "2014-05-07T12:53:43.799Z",
-"updated_date": "2014-05-07T12:53:43.799Z",
-"gender": "M",
-"background_image": null,
-"words_to_live_by": null,
-"my_bio": null,
-"sponsor_id": null,
-"timezone_id": 35,
-"language": "en_us",
-"unit_of_measurement": "Imperial",
-"business_unit_id": null,
-"office_id": null,
-"is_wizard_form_completed": true,
-"is_internal": false,
-"member_settings_id": 7928,
-"status": "Active",
-"title": null,
-"department": null,
-"location": null,
-"type": "Primary",
-"country": null,
-"hire_date": null,
-"original_hire_date": null,
-"employee_id": null,
-"division": null,
-"failed_security_question_count": null,
-"security_question_lockout": null,
-"country_id": null,
-"user_name": null,
-"phone_number": null,
-"gender_identity": "Male",
-"external_id": "efd8cf4d5659733d42c54ba79db771be",
-"state_id": null,
-"enrollment_date": "2014-05-07T12:53:43.799Z"
-},
-"source": {
-"version": "1.0.2.Final",
-"connector": "postgresql",
-"name": "dbserver1",
-"ts_ms": 1584553306402,
-"snapshot": "false",
-"db": "genesis",
-"schema": "public",
-"table": "member",
-"txId": 607,
-"lsn": 34200376,
-"xmin": null
-},
-"op": "c",
-"ts_ms": 1584553306409
-}
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "first_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "last_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "display_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "profile_picture"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "date_of_birth"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "email_address"
+          },
+          {
+            "type": "boolean",
+            "optional": false,
+            "field": "is_deleted"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "vhm_legacy_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "created_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "updated_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "background_image"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "words_to_live_by"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "my_bio"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "sponsor_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "timezone_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "language"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "unit_of_measurement"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "business_unit_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "office_id"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_wizard_form_completed"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_internal"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "member_settings_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "status"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "title"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "department"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "location"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "type"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "country"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "hire_date"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "original_hire_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "employee_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "division"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "field": "failed_security_question_count"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "security_question_lockout"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "country_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "user_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "phone_number"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender_identity"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "external_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "state_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "enrollment_date"
+          }
+        ],
+        "optional": true,
+        "name": "dbserver1.public.member.Value",
+        "field": "before"
+      },
+      {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "first_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "last_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "display_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "profile_picture"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "date_of_birth"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "email_address"
+          },
+          {
+            "type": "boolean",
+            "optional": false,
+            "field": "is_deleted"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "vhm_legacy_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "created_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "updated_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "background_image"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "words_to_live_by"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "my_bio"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "sponsor_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "timezone_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "language"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "unit_of_measurement"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "business_unit_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "office_id"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_wizard_form_completed"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_internal"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "member_settings_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "status"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "title"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "department"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "location"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "type"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "country"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "hire_date"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "original_hire_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "employee_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "division"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "field": "failed_security_question_count"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "security_question_lockout"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "country_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "user_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "phone_number"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender_identity"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "external_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "state_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "enrollment_date"
+          }
+        ],
+        "optional": true,
+        "name": "dbserver1.public.member.Value",
+        "field": "after"
+      },
+      {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "string",
+            "optional": false,
+            "field": "version"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "connector"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "name"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "ts_ms"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.data.Enum",
+            "version": 1,
+            "parameters": {
+              "allowed": "true,last,false"
+            },
+            "default": "false",
+            "field": "snapshot"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "db"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "schema"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "table"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "txId"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "lsn"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "xmin"
+          }
+        ],
+        "optional": false,
+        "name": "io.debezium.connector.postgresql.Source",
+        "field": "source"
+      },
+      {
+        "type": "string",
+        "optional": false,
+        "field": "op"
+      },
+      {
+        "type": "int64",
+        "optional": true,
+        "field": "ts_ms"
+      }
+    ],
+    "optional": false,
+    "name": "dbserver1.public.member.Envelope"
+  },
+  "payload": {
+    "before": null,
+    "after": {
+      "id": 2265,
+      "first_name": "Tony",
+      "last_name": "Parker",
+      "display_name": "Tony Parker",
+      "profile_picture": "https://qaauth1.virginhealthmiles.com/images/ce64b453-f1a1-4f91-b450-20b7c11de5c0.gif",
+      "date_of_birth": null,
+      "email_address": "tonyPvP@gmail.com",
+      "is_deleted": false,
+      "vhm_legacy_id": 134295,
+      "created_date": "2014-05-07T12:53:43.799Z",
+      "updated_date": "2014-05-07T12:53:43.799Z",
+      "gender": "M",
+      "background_image": null,
+      "words_to_live_by": null,
+      "my_bio": null,
+      "sponsor_id": null,
+      "timezone_id": 35,
+      "language": "en_us",
+      "unit_of_measurement": "Imperial",
+      "business_unit_id": null,
+      "office_id": null,
+      "is_wizard_form_completed": true,
+      "is_internal": false,
+      "member_settings_id": 7928,
+      "status": "Active",
+      "title": null,
+      "department": null,
+      "location": null,
+      "type": "Primary",
+      "country": null,
+      "hire_date": null,
+      "original_hire_date": null,
+      "employee_id": null,
+      "division": null,
+      "failed_security_question_count": null,
+      "security_question_lockout": null,
+      "country_id": null,
+      "user_name": null,
+      "phone_number": null,
+      "gender_identity": "Male",
+      "external_id": "efd8cf4d5659733d42c54ba79db771be",
+      "state_id": null,
+      "enrollment_date": "2014-05-07T12:53:43.799Z"
+    },
+    "source": {
+      "version": "1.0.2.Final",
+      "connector": "postgresql",
+      "name": "dbserver1",
+      "ts_ms": 1584553306402,
+      "snapshot": "false",
+      "db": "genesis",
+      "schema": "public",
+      "table": "member",
+      "txId": 607,
+      "lsn": 34200376,
+      "xmin": null
+    },
+    "op": "c",
+    "ts_ms": 1584553306409
+  }
 }
 ```
 
@@ -2261,644 +2585,644 @@ output from watcher (op: d for delete):
 ```json
 //RECORD 2: key
 {
-"schema": {
-"type": "struct",
-"fields": [
-{
-"type": "int64",
-"optional": false,
-"field": "id"
-}
-],
-"optional": false,
-"name": "dbserver1.public.member.Key"
-},
-"payload": {
-"id": 2265
-}
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {
+        "type": "int64",
+        "optional": false,
+        "field": "id"
+      }
+    ],
+    "optional": false,
+    "name": "dbserver1.public.member.Key"
+  },
+  "payload": {
+    "id": 2265
+  }
 }
 
 //RECORD 2: value
 {
-"schema": {
-"type": "struct",
-"fields": [
-{
-"type": "struct",
-"fields": [
-{
-"type": "int64",
-"optional": false,
-"field": "id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "first_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "last_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "display_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "profile_picture"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "date_of_birth"
-},
-{
-"type": "string",
-"optional": false,
-"field": "email_address"
-},
-{
-"type": "boolean",
-"optional": false,
-"field": "is_deleted"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "vhm_legacy_id"
-},
-{
-"type": "string",
-"optional": false,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "created_date"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "updated_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender"
-},
-{
-"type": "string",
-"optional": true,
-"field": "background_image"
-},
-{
-"type": "string",
-"optional": true,
-"field": "words_to_live_by"
-},
-{
-"type": "string",
-"optional": true,
-"field": "my_bio"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "sponsor_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "timezone_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "language"
-},
-{
-"type": "string",
-"optional": true,
-"field": "unit_of_measurement"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "business_unit_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "office_id"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_wizard_form_completed"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_internal"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "member_settings_id"
-},
-{
-"type": "string",
-"optional": false,
-"field": "status"
-},
-{
-"type": "string",
-"optional": true,
-"field": "title"
-},
-{
-"type": "string",
-"optional": true,
-"field": "department"
-},
-{
-"type": "string",
-"optional": true,
-"field": "location"
-},
-{
-"type": "string",
-"optional": false,
-"field": "type"
-},
-{
-"type": "string",
-"optional": true,
-"field": "country"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "hire_date"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "original_hire_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "employee_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "division"
-},
-{
-"type": "int32",
-"optional": true,
-"field": "failed_security_question_count"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "security_question_lockout"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "country_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "user_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "phone_number"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender_identity"
-},
-{
-"type": "string",
-"optional": true,
-"field": "external_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "state_id"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "enrollment_date"
-}
-],
-"optional": true,
-"name": "dbserver1.public.member.Value",
-"field": "before"
-},
-{
-"type": "struct",
-"fields": [
-{
-"type": "int64",
-"optional": false,
-"field": "id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "first_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "last_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "display_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "profile_picture"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "date_of_birth"
-},
-{
-"type": "string",
-"optional": false,
-"field": "email_address"
-},
-{
-"type": "boolean",
-"optional": false,
-"field": "is_deleted"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "vhm_legacy_id"
-},
-{
-"type": "string",
-"optional": false,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "created_date"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "updated_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender"
-},
-{
-"type": "string",
-"optional": true,
-"field": "background_image"
-},
-{
-"type": "string",
-"optional": true,
-"field": "words_to_live_by"
-},
-{
-"type": "string",
-"optional": true,
-"field": "my_bio"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "sponsor_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "timezone_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "language"
-},
-{
-"type": "string",
-"optional": true,
-"field": "unit_of_measurement"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "business_unit_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "office_id"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_wizard_form_completed"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "is_internal"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "member_settings_id"
-},
-{
-"type": "string",
-"optional": false,
-"field": "status"
-},
-{
-"type": "string",
-"optional": true,
-"field": "title"
-},
-{
-"type": "string",
-"optional": true,
-"field": "department"
-},
-{
-"type": "string",
-"optional": true,
-"field": "location"
-},
-{
-"type": "string",
-"optional": false,
-"field": "type"
-},
-{
-"type": "string",
-"optional": true,
-"field": "country"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "hire_date"
-},
-{
-"type": "int32",
-"optional": true,
-"name": "io.debezium.time.Date",
-"version": 1,
-"field": "original_hire_date"
-},
-{
-"type": "string",
-"optional": true,
-"field": "employee_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "division"
-},
-{
-"type": "int32",
-"optional": true,
-"field": "failed_security_question_count"
-},
-{
-"type": "boolean",
-"optional": true,
-"field": "security_question_lockout"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "country_id"
-},
-{
-"type": "string",
-"optional": true,
-"field": "user_name"
-},
-{
-"type": "string",
-"optional": true,
-"field": "phone_number"
-},
-{
-"type": "string",
-"optional": true,
-"field": "gender_identity"
-},
-{
-"type": "string",
-"optional": true,
-"field": "external_id"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "state_id"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.time.ZonedTimestamp",
-"version": 1,
-"field": "enrollment_date"
-}
-],
-"optional": true,
-"name": "dbserver1.public.member.Value",
-"field": "after"
-},
-{
-"type": "struct",
-"fields": [
-{
-"type": "string",
-"optional": false,
-"field": "version"
-},
-{
-"type": "string",
-"optional": false,
-"field": "connector"
-},
-{
-"type": "string",
-"optional": false,
-"field": "name"
-},
-{
-"type": "int64",
-"optional": false,
-"field": "ts_ms"
-},
-{
-"type": "string",
-"optional": true,
-"name": "io.debezium.data.Enum",
-"version": 1,
-"parameters": {
-"allowed": "true,last,false"
-},
-"default": "false",
-"field": "snapshot"
-},
-{
-"type": "string",
-"optional": false,
-"field": "db"
-},
-{
-"type": "string",
-"optional": false,
-"field": "schema"
-},
-{
-"type": "string",
-"optional": false,
-"field": "table"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "txId"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "lsn"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "xmin"
-}
-],
-"optional": false,
-"name": "io.debezium.connector.postgresql.Source",
-"field": "source"
-},
-{
-"type": "string",
-"optional": false,
-"field": "op"
-},
-{
-"type": "int64",
-"optional": true,
-"field": "ts_ms"
-}
-],
-"optional": false,
-"name": "dbserver1.public.member.Envelope"
-},
-"payload": {
-"before": {
-"id": 2265,
-"first_name": null,
-"last_name": null,
-"display_name": null,
-"profile_picture": null,
-"date_of_birth": null,
-"email_address": "",
-"is_deleted": false,
-"vhm_legacy_id": 0,
-"created_date": "1970-01-01T00:00:00Z",
-"updated_date": null,
-"gender": null,
-"background_image": null,
-"words_to_live_by": null,
-"my_bio": null,
-"sponsor_id": null,
-"timezone_id": null,
-"language": null,
-"unit_of_measurement": null,
-"business_unit_id": null,
-"office_id": null,
-"is_wizard_form_completed": null,
-"is_internal": null,
-"member_settings_id": 0,
-"status": "",
-"title": null,
-"department": null,
-"location": null,
-"type": "",
-"country": null,
-"hire_date": null,
-"original_hire_date": null,
-"employee_id": null,
-"division": null,
-"failed_security_question_count": null,
-"security_question_lockout": null,
-"country_id": null,
-"user_name": null,
-"phone_number": null,
-"gender_identity": null,
-"external_id": null,
-"state_id": null,
-"enrollment_date": null
-},
-"after": null,
-"source": {
-"version": "1.0.2.Final",
-"connector": "postgresql",
-"name": "dbserver1",
-"ts_ms": 1584553562165,
-"snapshot": "false",
-"db": "genesis",
-"schema": "public",
-"table": "member",
-"txId": 608,
-"lsn": 34202232,
-"xmin": null
-},
-"op": "d",
-"ts_ms": 1584553562168
-}
+  "schema": {
+    "type": "struct",
+    "fields": [
+      {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "first_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "last_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "display_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "profile_picture"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "date_of_birth"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "email_address"
+          },
+          {
+            "type": "boolean",
+            "optional": false,
+            "field": "is_deleted"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "vhm_legacy_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "created_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "updated_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "background_image"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "words_to_live_by"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "my_bio"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "sponsor_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "timezone_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "language"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "unit_of_measurement"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "business_unit_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "office_id"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_wizard_form_completed"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_internal"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "member_settings_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "status"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "title"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "department"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "location"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "type"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "country"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "hire_date"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "original_hire_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "employee_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "division"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "field": "failed_security_question_count"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "security_question_lockout"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "country_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "user_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "phone_number"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender_identity"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "external_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "state_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "enrollment_date"
+          }
+        ],
+        "optional": true,
+        "name": "dbserver1.public.member.Value",
+        "field": "before"
+      },
+      {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "first_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "last_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "display_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "profile_picture"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "date_of_birth"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "email_address"
+          },
+          {
+            "type": "boolean",
+            "optional": false,
+            "field": "is_deleted"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "vhm_legacy_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "created_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "updated_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "background_image"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "words_to_live_by"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "my_bio"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "sponsor_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "timezone_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "language"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "unit_of_measurement"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "business_unit_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "office_id"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_wizard_form_completed"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "is_internal"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "member_settings_id"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "status"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "title"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "department"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "location"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "type"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "country"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "hire_date"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "name": "io.debezium.time.Date",
+            "version": 1,
+            "field": "original_hire_date"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "employee_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "division"
+          },
+          {
+            "type": "int32",
+            "optional": true,
+            "field": "failed_security_question_count"
+          },
+          {
+            "type": "boolean",
+            "optional": true,
+            "field": "security_question_lockout"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "country_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "user_name"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "phone_number"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "gender_identity"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "field": "external_id"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "state_id"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.time.ZonedTimestamp",
+            "version": 1,
+            "field": "enrollment_date"
+          }
+        ],
+        "optional": true,
+        "name": "dbserver1.public.member.Value",
+        "field": "after"
+      },
+      {
+        "type": "struct",
+        "fields": [
+          {
+            "type": "string",
+            "optional": false,
+            "field": "version"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "connector"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "name"
+          },
+          {
+            "type": "int64",
+            "optional": false,
+            "field": "ts_ms"
+          },
+          {
+            "type": "string",
+            "optional": true,
+            "name": "io.debezium.data.Enum",
+            "version": 1,
+            "parameters": {
+              "allowed": "true,last,false"
+            },
+            "default": "false",
+            "field": "snapshot"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "db"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "schema"
+          },
+          {
+            "type": "string",
+            "optional": false,
+            "field": "table"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "txId"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "lsn"
+          },
+          {
+            "type": "int64",
+            "optional": true,
+            "field": "xmin"
+          }
+        ],
+        "optional": false,
+        "name": "io.debezium.connector.postgresql.Source",
+        "field": "source"
+      },
+      {
+        "type": "string",
+        "optional": false,
+        "field": "op"
+      },
+      {
+        "type": "int64",
+        "optional": true,
+        "field": "ts_ms"
+      }
+    ],
+    "optional": false,
+    "name": "dbserver1.public.member.Envelope"
+  },
+  "payload": {
+    "before": {
+      "id": 2265,
+      "first_name": null,
+      "last_name": null,
+      "display_name": null,
+      "profile_picture": null,
+      "date_of_birth": null,
+      "email_address": "",
+      "is_deleted": false,
+      "vhm_legacy_id": 0,
+      "created_date": "1970-01-01T00:00:00Z",
+      "updated_date": null,
+      "gender": null,
+      "background_image": null,
+      "words_to_live_by": null,
+      "my_bio": null,
+      "sponsor_id": null,
+      "timezone_id": null,
+      "language": null,
+      "unit_of_measurement": null,
+      "business_unit_id": null,
+      "office_id": null,
+      "is_wizard_form_completed": null,
+      "is_internal": null,
+      "member_settings_id": 0,
+      "status": "",
+      "title": null,
+      "department": null,
+      "location": null,
+      "type": "",
+      "country": null,
+      "hire_date": null,
+      "original_hire_date": null,
+      "employee_id": null,
+      "division": null,
+      "failed_security_question_count": null,
+      "security_question_lockout": null,
+      "country_id": null,
+      "user_name": null,
+      "phone_number": null,
+      "gender_identity": null,
+      "external_id": null,
+      "state_id": null,
+      "enrollment_date": null
+    },
+    "after": null,
+    "source": {
+      "version": "1.0.2.Final",
+      "connector": "postgresql",
+      "name": "dbserver1",
+      "ts_ms": 1584553562165,
+      "snapshot": "false",
+      "db": "genesis",
+      "schema": "public",
+      "table": "member",
+      "txId": 608,
+      "lsn": 34202232,
+      "xmin": null
+    },
+    "op": "d",
+    "ts_ms": 1584553562168
+  }
 }
 ```
 
